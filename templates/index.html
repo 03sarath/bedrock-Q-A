@@ -6,6 +6,8 @@
     <title>Chat with your Document 📄</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+    <!-- marked.js for markdown rendering -->
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
     <style>
         body {
             font-family: 'Inter', sans-serif;
@@ -41,7 +43,7 @@
             box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
         }
         .chat-container {
-            height: 400px;
+            height: 450px;
             overflow-y: auto;
             border: 1px solid #e9ecef;
             border-radius: 10px;
@@ -54,7 +56,7 @@
             margin-bottom: 15px;
             padding: 12px 16px;
             border-radius: 12px;
-            max-width: 80%;
+            max-width: 85%;
             position: relative;
             animation: fadeIn 0.3s ease;
         }
@@ -65,15 +67,100 @@
         .user-message {
             background-color: #6B73FF;
             color: white;
-            margin-left: 20%;
+            margin-left: 15%;
             border-bottom-right-radius: 4px;
         }
         .bot-message {
             background-color: #f1f3ff;
             color: #2c3e50;
-            margin-right: 20%;
+            margin-right: 15%;
             border-bottom-left-radius: 4px;
         }
+
+        /* ── Markdown rendering inside bot messages ── */
+        .bot-message h1,
+        .bot-message h2,
+        .bot-message h3 {
+            font-size: 1rem;
+            font-weight: 700;
+            margin-top: 12px;
+            margin-bottom: 4px;
+            color: #1a1f5e;
+        }
+        .bot-message h1 { font-size: 1.1rem; }
+        .bot-message p {
+            margin-bottom: 6px;
+            line-height: 1.6;
+        }
+        .bot-message ul,
+        .bot-message ol {
+            padding-left: 20px;
+            margin-bottom: 8px;
+        }
+        .bot-message li {
+            margin-bottom: 4px;
+            line-height: 1.5;
+        }
+        .bot-message strong {
+            font-weight: 700;
+            color: #1a1f5e;
+        }
+        .bot-message em {
+            font-style: italic;
+        }
+        .bot-message code {
+            background: #dde2ff;
+            padding: 1px 6px;
+            border-radius: 4px;
+            font-size: 13px;
+            font-family: monospace;
+        }
+        .bot-message pre {
+            background: #1e2247;
+            color: #e8eaff;
+            padding: 12px;
+            border-radius: 8px;
+            overflow-x: auto;
+            font-size: 13px;
+            margin: 8px 0;
+        }
+        .bot-message pre code {
+            background: transparent;
+            color: inherit;
+            padding: 0;
+        }
+        .bot-message blockquote {
+            border-left: 3px solid #6B73FF;
+            margin: 8px 0;
+            padding: 4px 12px;
+            color: #555;
+            font-style: italic;
+        }
+        .bot-message hr {
+            border: none;
+            border-top: 1px solid #ccd0f5;
+            margin: 10px 0;
+        }
+        .bot-message table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 14px;
+            margin: 8px 0;
+        }
+        .bot-message th,
+        .bot-message td {
+            border: 1px solid #c8cff5;
+            padding: 6px 10px;
+            text-align: left;
+        }
+        .bot-message th {
+            background: #dde2ff;
+            font-weight: 600;
+        }
+        /* Remove top margin on first child element */
+        .bot-message > *:first-child { margin-top: 0; }
+        .bot-message > *:last-child { margin-bottom: 0; }
+
         .loading {
             display: none;
             text-align: center;
@@ -135,7 +222,7 @@
         </div>
 
         <div class="chat-container" id="chatContainer">
-            <!-- Chat messages will be added here -->
+            <!-- Chat messages will appear here -->
         </div>
 
         <div class="input-group question-input" id="questionInputGroup">
@@ -154,6 +241,12 @@
     </div>
 
     <script>
+        // Configure marked options
+        marked.setOptions({
+            breaks: true,       // Convert \n to <br>
+            gfm: true           // GitHub Flavoured Markdown (tables, strikethrough, etc.)
+        });
+
         const dropZone = document.getElementById('dropZone');
         const fileInput = document.getElementById('fileInput');
         const questionInput = document.getElementById('questionInput');
@@ -166,7 +259,15 @@
         function addMessage(message, isUser = false) {
             const messageDiv = document.createElement('div');
             messageDiv.className = `message ${isUser ? 'user-message' : 'bot-message'}`;
-            messageDiv.textContent = message;
+
+            if (isUser) {
+                // Plain text for user messages (safe, no XSS risk)
+                messageDiv.textContent = message;
+            } else {
+                // Render markdown for bot responses
+                messageDiv.innerHTML = marked.parse(message);
+            }
+
             chatContainer.appendChild(messageDiv);
             chatContainer.scrollTop = chatContainer.scrollHeight;
         }
@@ -178,13 +279,10 @@
                 return;
             }
 
-            // Add user question to chat
             addMessage(question, true);
             questionInput.value = '';
-
             loading.style.display = 'block';
 
-            // Prepare payload for API Gateway
             const payload = {
                 context: currentPdfText,
                 question: question
@@ -192,23 +290,21 @@
 
             fetch('/ask-question', {
                 method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json'
-                },
+                headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(payload)
             })
             .then(response => response.json())
             .then(data => {
                 loading.style.display = 'none';
                 if (data.error) {
-                    addMessage(`❌ Error: ${data.error}`);
+                    addMessage(`❌ **Error:** ${data.error}`);
                 } else {
                     addMessage(data.answer);
                 }
             })
             .catch(error => {
                 loading.style.display = 'none';
-                addMessage(`❌ Error: ${error.message}`);
+                addMessage(`❌ **Error:** ${error.message}`);
             });
         }
 
@@ -216,9 +312,7 @@
         dropZone.addEventListener('click', () => fileInput.click());
         sendButton.addEventListener('click', handleSend);
         questionInput.addEventListener('keypress', (e) => {
-            if (e.key === 'Enter') {
-                handleSend();
-            }
+            if (e.key === 'Enter') handleSend();
         });
 
         dropZone.addEventListener('dragover', (e) => {
@@ -246,9 +340,7 @@
 
         fileInput.addEventListener('change', (e) => {
             const file = e.target.files[0];
-            if (file) {
-                handleFile(file);
-            }
+            if (file) handleFile(file);
         });
 
         function handleFile(file) {
@@ -266,7 +358,7 @@
             .then(data => {
                 loading.style.display = 'none';
                 if (data.error) {
-                    addMessage(`❌ Error: ${data.error}`);
+                    addMessage(`❌ **Error:** ${data.error}`);
                 } else {
                     currentPdfText = data.text;
                     addMessage('✅ Document processed successfully! You can now ask questions about its content.');
@@ -275,9 +367,9 @@
             })
             .catch(error => {
                 loading.style.display = 'none';
-                addMessage(`❌ Error: ${error.message}`);
+                addMessage(`❌ **Error:** ${error.message}`);
             });
         }
     </script>
 </body>
-</html> 
+</html>
