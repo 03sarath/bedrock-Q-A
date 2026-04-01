@@ -1,82 +1,94 @@
+from flask import Flask, render_template, request, jsonify
+from werkzeug.utils import secure_filename
+import os
+import PyPDF2
+from io import BytesIO
+import requests
 import json
-import boto3
 
-def lambda_handler(event, context):
-    bedrock = boto3.client('bedrock-runtime')
-    
-    if event.get('httpMethod') == 'OPTIONS':
-        return {
-            'statusCode': 200,
-            'headers': {
-                'Access-Control-Allow-Origin': '*',
-                'Access-Control-Allow-Headers': 'Content-Type',
-                'Access-Control-Allow-Methods': 'POST,OPTIONS'
-            },
-            'body': ''
-        }
-    
+app = Flask(__name__)
+app.config['UPLOAD_FOLDER'] = 'uploads'
+app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB max file size
+
+# API Gateway endpoint URL
+API_GATEWAY_URL = 'https://8atev3w62g.execute-api.us-east-1.amazonaws.com/default/gen-ai'  # Replace with your API Gateway URL
+
+# Create uploads directory if it doesn't exist
+os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
+
+def allowed_file(filename):
+    return '.' in filename and filename.rsplit('.', 1)[1].lower() == 'pdf'
+
+def extract_text_from_pdf(file):
     try:
-        body = json.loads(event.get('body', '{}'))
-        pdf_text = body.get('context', '')
-        question = body.get('question', '')
+        pdf_reader = PyPDF2.PdfReader(file)
+        text = ""
+        for page in pdf_reader.pages:
+            text += page.extract_text()
+        return text
+    except Exception as e:
+        return f"Error extracting text: {str(e)}"
+
+@app.route('/')
+def index():
+    return render_template('index.html')
+
+@app.route('/upload-pdf', methods=['POST'])
+def upload_pdf():
+    if 'file' not in request.files:
+        return jsonify({'error': 'No file part'}), 400
+    
+    file = request.files['file']
+    if file.filename == '':
+        return jsonify({'error': 'No selected file'}), 400
+    
+    if file and allowed_file(file.filename):
+        try:
+            # Extract text from PDF
+            pdf_text = extract_text_from_pdf(BytesIO(file.read()))
+            
+            # Store the PDF text in the session
+            return jsonify({
+                'success': True,
+                'text': pdf_text
+            })
+                
+        except Exception as e:
+            return jsonify({'error': str(e)}), 500
+    
+    return jsonify({'error': 'Invalid file type'}), 400
+
+@app.route('/ask-question', methods=['POST'])
+def ask_question():
+    try:
+        data = request.get_json()
+        pdf_text = data.get('context', '')
+        question = data.get('question', '')
         
         if not pdf_text or not question:
-            return {
-                'statusCode': 400,
-                'headers': {
-                    'Access-Control-Allow-Origin': '*',
-                    'Content-Type': 'application/json'
-                },
-                'body': json.dumps({'error': 'Missing context or question'})
-            }
+            return jsonify({'error': 'Missing context or question'}), 400
         
-        prompt_data = f"""Answer the question based only on the information provided between ##.
-Only answer the question if you can find relevant information in the context, otherwise, answer "I don't have enough information to answer this question".
-#
-{pdf_text}
-#
-Question: {question}
-Answer:"""
+        # Prepare payload for API Gateway
+        payload = {
+            'context': pdf_text,
+            'question': question
+        }
         
-        bedrock_body = json.dumps({
-            "messages": [
-                {
-                    "role": "user",
-                    "content": [{"text": prompt_data}]
-                }
-            ],
-            "inferenceConfig": {
-                "maxTokens": 512,
-                "temperature": 0,
-                "topP": 0.9
-            }
-        })
-        
-        response = bedrock.invoke_model(
-            body=bedrock_body,
-            modelId="us.amazon.nova-2-lite-v1:0",  # Nova 2 Lite
-            accept="application/json",
-            contentType="application/json"
+        # Make request to API Gateway
+        response = requests.post(
+            API_GATEWAY_URL,
+            json=payload,
+            headers={'Content-Type': 'application/json'}
         )
         
-        response_body = json.loads(response.get("body").read())
-        answer = response_body["output"]["message"]["content"][0]["text"]
-        
-        return {
-            'statusCode': 200,
-            'headers': {
-                'Access-Control-Allow-Origin': '*',
-                'Content-Type': 'application/json'
-            },
-            'body': json.dumps({'answer': answer.strip()})
-        }
-        
+        # Check response status
+        if response.status_code == 200:
+            return jsonify(response.json())
+        else:
+            return jsonify({'error': 'Error processing request'}), 500
+            
     except Exception as e:
-        return {
-            'statusCode': 500,
-            'headers': {
-                'Access-Control-Allow-Origin': '*',
-                'Content-Type': 'application/json'
-            },
-            'body': json.dumps({'error': str(e)})
-        }
+        return jsonify({'error': str(e)}), 500
+
+if __name__ == '__main__':
+    app.run(debug=True) 
