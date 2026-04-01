@@ -1,12 +1,9 @@
 import json
 import boto3
-import os
 
 def lambda_handler(event, context):
-    # Initialize Bedrock client
     bedrock = boto3.client('bedrock-runtime')
     
-    # Handle CORS preflight requests
     if event.get('httpMethod') == 'OPTIONS':
         return {
             'statusCode': 200,
@@ -19,10 +16,7 @@ def lambda_handler(event, context):
         }
     
     try:
-        # Parse the request body
         body = json.loads(event.get('body', '{}'))
-        
-        # Extract context and question from the request body
         pdf_text = body.get('context', '')
         question = body.get('question', '')
         
@@ -36,41 +30,37 @@ def lambda_handler(event, context):
                 'body': json.dumps({'error': 'Missing context or question'})
             }
         
-        # Construct the prompt
         prompt_data = f"""Answer the question based only on the information provided between ##.
 Only answer the question if you can find relevant information in the context, otherwise, answer "I don't have enough information to answer this question".
 #
 {pdf_text}
 #
-
 Question: {question}
 Answer:"""
         
-        # Bedrock parameters
-        parameters = {
-            "maxTokenCount": 512,
-            "stopSequences": [],
-            "temperature": 0,
-            "topP": 0.9
-        }
-        
-        # Prepare the request body
         bedrock_body = json.dumps({
-            "inputText": prompt_data,
-            "textGenerationConfig": parameters
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [{"text": prompt_data}]
+                }
+            ],
+            "inferenceConfig": {
+                "maxTokens": 512,
+                "temperature": 0,
+                "topP": 0.9
+            }
         })
         
-        # Invoke Bedrock model
         response = bedrock.invoke_model(
             body=bedrock_body,
-            modelId="amazon.titan-tg1-large",
+            modelId="us.amazon.nova-2-lite-v1:0",  # Nova 2 Lite
             accept="application/json",
             contentType="application/json"
         )
         
-        # Parse the response
         response_body = json.loads(response.get("body").read())
-        answer = response_body.get("results")[0].get("outputText")
+        answer = response_body["output"]["message"]["content"][0]["text"]
         
         return {
             'statusCode': 200,
@@ -78,9 +68,7 @@ Answer:"""
                 'Access-Control-Allow-Origin': '*',
                 'Content-Type': 'application/json'
             },
-            'body': json.dumps({
-                'answer': answer.strip()
-            })
+            'body': json.dumps({'answer': answer.strip()})
         }
         
     except Exception as e:
@@ -90,7 +78,5 @@ Answer:"""
                 'Access-Control-Allow-Origin': '*',
                 'Content-Type': 'application/json'
             },
-            'body': json.dumps({
-                'error': str(e)
-            })
-        } 
+            'body': json.dumps({'error': str(e)})
+        }
